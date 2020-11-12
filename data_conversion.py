@@ -194,8 +194,8 @@ class MySQL2MongoDB:
 
 	def migrate_json_to_mongodb(self):
 		db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname)
-		tables_name_list = self.schema.get_tables_name_list()
-		for table_name in tables_name_list:
+		tables_and_views_name_list = self.schema.get_tables_and_views_list()
+		for table_name in tables_and_views_name_list:
 			collection_name = table_name
 			json_filename = collection_name + ".json"
 			import_json_to_mongodb(db_connection, collection_name, self.schema_conv_output_option.dbname, json_filename, True)

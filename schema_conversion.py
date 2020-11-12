@@ -1,5 +1,6 @@
 import json, os
 from utilities import extract_dict, import_json_to_mongodb, open_connection_mongodb
+from collections import OrderedDict
 	
 class MySQLDatabaseSchema:
 	"""docstring for DatabaseSchema"""
@@ -13,11 +14,13 @@ class MySQLDatabaseSchema:
 		#load schema from file into data object
 
 	def load_schema(self):
-		with open(f"./intermediate_data/{self.schema_conv_init_option.dbname}/{self.schema_filename}") as schema_file:
-			db_schema = json.load(schema_file)
-		self.db_schema = db_schema
-		self.tables_schema = self.db_schema["catalog"]["tables"]
-		self.extracted_tables_schema = self.extract_tables_schema()
+		if not hasattr(self, "db_schema"):
+			with open(f"./intermediate_data/{self.schema_conv_init_option.dbname}/{self.schema_filename}") as schema_file:
+				db_schema = json.load(schema_file)
+			self.db_schema = db_schema
+			self.all_table_columns = self.db_schema["all-table-columns"]
+			self.tables_schema = self.db_schema["catalog"]["tables"]
+			self.extracted_tables_schema = self.extract_tables_schema()
 	
 	def generate_mysql_schema(self, info_level="maximum"):
 		command_create_intermediate_dir = f"mkdir -p ./intermediate_data/{self.schema_conv_init_option.dbname}"
@@ -105,11 +108,16 @@ class MySQLDatabaseSchema:
 
 	def get_tables_name_list(self):
 		"""Get list of name of all tables from table schema"""
-		# extracted_tables_schema = extract_tables_schema(tables_schema)
-		table_name_list = list(map(lambda table: table["name"], self.extracted_tables_schema))
+		self.load_schema()
+		table_name_list = list(map(lambda table: table["name"], list(filter(lambda table: table["remarks"] == "", self.tables_schema))))
 		return table_name_list
 
+	def get_tables_and_views_list(self):
+		table_and_view_name_list = list(map(lambda table: table["name"], self.extracted_tables_schema))
+		return table_and_view_name_list
+
 	def get_table_column_and_data_type(self):
+		self.load_schema()
 		table_dict = self.get_tables_dict()
 		all_columns = self.db_schema["all-table-columns"]
 		schema_type_dict = {}
@@ -117,7 +125,7 @@ class MySQLDatabaseSchema:
 			dtype = col["column-data-type"]
 			if type(dtype) is dict:
 				schema_type_dict[dtype["@uuid"]] = dtype["name"].split()[0]
-		table_list = self.get_tables_name_list()
+		table_list = self.get_tables_and_views_list()
 		res = {}
 		for table_name in table_list:
 			res[table_name] = {}
@@ -128,3 +136,103 @@ class MySQLDatabaseSchema:
 			else:
 				res[table_dict[col["@uuid"]]][col["name"]] = schema_type_dict[dtype]
 		return res
+
+	def convert_to_mongo_schema(self):
+		table_view_column_dtype = self.get_table_column_and_data_type()
+		table_list = self.get_tables_name_list()
+		uuid_col_dict = self.get_columns_dict()
+		table_column_dtype = {}
+		for table in table_list:
+			table_column_dtype[table] = table_view_column_dtype[table]
+		table_cols_uuid = {}
+		for table in self.tables_schema:
+			table_name = table["name"]
+			if table_name in table_list:
+				table_cols_uuid[table_name] = table["columns"]
+		enum_col_dict = {}
+		for col in self.all_table_columns:
+			if col["attributes"]["COLUMN_TYPE"][:4] == "enum":
+				# print(col["short-name"])
+				data = {}
+				table_name, col_name = col["short-name"].split(".")[:2]
+				if table_name in table_list:
+					# data = {}
+					# data[col_name] = col_name.
+					# print(table_name, col_name)
+					data = list(map(lambda ele: ele[1:-1], col["attributes"]["COLUMN_TYPE"][5:-1].split(",")))
+					sub_dict = {}
+					sub_dict[col_name] = data
+					enum_col_dict[table_name] = sub_dict
+		# for table in table_name_list:
+		for table in table_cols_uuid:
+			props = {}
+			for col_uuid in table_cols_uuid[table]:
+				col_name = uuid_col_dict[col_uuid]
+				mysql_dtype = table_column_dtype[table][col_name]
+				if mysql_dtype == "ENUM":
+					data = {
+						"enum": enum_col_dict[table][col_name],
+						"description": "can only be one of the enum values"
+					}
+				else:
+					data = {
+						"bsonType": self.data_type_schema_mapping(mysql_dtype)
+					}
+				props[col_name] = data
+				json_schema = {}
+				json_schema["bsonType"] = "object"
+				json_schema["properties"] = props
+				db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
+				db_connection.drop_collection(table)
+				db_connection.create_collection(table)
+				vexpr = {"$jsonSchema": json_schema}
+				cmd = OrderedDict([('collMod', table), ('validator', vexpr)])
+				db_connection.command(cmd)
+		# for table in table_list:
+		# 	#decl jsonSchema
+		# 	props = {}
+		# 	#for col in table
+		# 	cols_in_table = table_view_column_dtype[table]
+		# 	for col in cols_in_table:
+		# 		#add col details to jsonSchema
+		# 		mysql_dtype = cols_in_table[col]
+		# 		data = {}
+		# 		if(mysql_dtype == "ENUM"):
+		# 			# data["enum"] =
+		# 			pass 
+		# 		else:
+		# 		props[col] = data
+		# 	#add jsonSchema to db
+		# 	json_schema = {}
+		# 	json_schema["bsonType"] = "object"
+		# 	json_schema["properties"] = props
+		# 	db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
+		# 	db_connection.drop_collection(table)
+		# 	db_connection.create_collection(table)
+		# 	vexpr = {"$jsonSchema": json_schema}
+		# 	cmd = OrderedDict([('collMod', table),
+	 #        ('validator', vexpr)])
+		# 	db_connection.command(cmd)
+
+	def data_type_schema_mapping(self, mysql_type):
+		dtype_dict = {}
+		dtype_dict["int"] = ["TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER"] 
+		dtype_dict["long"] = ["BIGINT"]
+		dtype_dict["decimal"] = ["DECIMAL", "DEC", "FIXED"]
+		dtype_dict["double"] = ["FLOAT", "DOUBLE", "REAL"]
+		dtype_dict["bool"] = ["BOOL", "BOOLEAN"]
+		dtype_dict["date"] = ["DATE", "YEAR", "DATETIME", "TIMESTAMP", "TIME"]
+		# dtype_dict["timestamp"] = []
+		dtype_dict["binData"] = ["BIT", "BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
+		# dtype_dict["blob"] = []
+		dtype_dict["string"] = ["CHARACTER", "CHARSET", "ASCII", "UNICODE", "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT"]
+		dtype_dict["object"] = ["ENUM", "SET", "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"]
+		# dtype_dict["single-geometry"] = []
+		# dtype_dict["multiple-geometry"] = []
+
+		for mongodb_type in dtype_dict.keys():
+			if mysql_type in dtype_dict[mongodb_type]:
+				# print(mysql_type, mongodb_type)
+				return mongodb_type
+		print(f"MySQL data type {mysql_type} has not been handled!")
+		return None

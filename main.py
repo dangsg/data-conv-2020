@@ -22,10 +22,10 @@ if __name__ == '__main__':
 	mysql_database_schema = MySQLDatabaseSchema(schema_conv_init_option, schema_conv_output_option)
 	# mysql_database_schema.generate_mysql_schema()
 	# mysql_database_schema.save_schema()
-	mysql_database_schema.load_schema()
-	# print(mysql_database_schema.get_table_column_and_data_type())
+	# mysql_database_schema.load_schema()
+	# mysql_database_schema.convert_to_mongo_schema()
 
 	mysql2mongodb = MySQL2MongoDB(schema_conv_init_option, schema_conv_output_option, mysql_database_schema)
-	# mysql2mongodb.migrate_mysql_to_mongodb()
-	mysql2mongodb.convert_relations_to_references()
+	mysql2mongodb.migrate_mysql_to_mongodb()
+	# mysql2mongodb.convert_relations_to_references()
 
