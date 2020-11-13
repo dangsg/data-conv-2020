@@ -2,7 +2,7 @@ import sys, json, bson
 from schema_conversion import MySQLDatabaseSchema
 from utilities import open_connection_mysql, open_connection_mongodb, import_json_to_mongodb, extract_dict, store_json_to_mongodb
 from bson.decimal128 import Decimal128
-import decimal
+from decimal import Decimal
 from bson import BSON
 	
 class MySQL2MongoDB:
@@ -66,6 +66,7 @@ class MySQL2MongoDB:
 
 		auto_convert_set = set(set(mongodb_dtype.values()))
 		manual_convert_set = set(mongodb_dtype.values()) - auto_convert_set
+		# table_coluuid_colname_dict = self.schema.get_table_coluuid_colname_dict()
 		# print(auto_convert_set)
 		# print(manual_convert_set)
 
@@ -91,6 +92,8 @@ class MySQL2MongoDB:
 							raise Exception(f"Data type {dtype} has not been handled!")
 						elif target_dtype == mongodb_dtype["single-geometry"]:
 							sql_cmd = sql_cmd + " AsText(" + col + "),"
+							# sql_cmd = sql_cmd + " ST_AsGeoJSON(" + col + "),"
+							# sql_cmd = sql_cmd + " AsWKT(" + col + "),"
 						else:
 							sql_cmd = sql_cmd + " `" + col + "`,"
 					#join sql
@@ -108,39 +111,66 @@ class MySQL2MongoDB:
 						data = {}
 						for i in range(len(col_fetch_seq)):
 							col = col_fetch_seq[i]
+							# null_flag = False
 							dtype = table_column_dtype_dict[table][col]
 							target_dtype = self.find_target_dtype(dtype, dtype_dict, mongodb_dtype)
+							# print(dtype, target_dtype)
 							#generate SQL
-							if dtype == "GEOMETRY":
-								geodata = row[i][6:-1].split()
-								# print(row[i][0])
-								# print(geodata)
-								converted_data = {
-									"type": "Point",
-									"coordinates": geodata[:]
-								}
-							elif target_dtype == mongodb_dtype["decimal"]:
-								converted_data = Decimal128(row[i])
-							elif target_dtype == mongodb_dtype["object"]:
-								if type(row[i]) is str:
-									converted_data = [row[i]]
+							if row[i] != None:
+								if dtype == "GEOMETRY":
+									geodata = [float(num) for num in row[i][6:-1].split()]
+									geo_x, geo_y = geodata[:2]
+									if geo_x > 180 or geo_x < -180:
+										geo_x = 0
+									if geo_y > 90 or geo_y < -90:
+										geo_y = 0
+									converted_data = {
+										"type": "Point",
+										"coordinates": [geo_x, geo_y]
+									}
+									# print("1: ", row[i])
+									# converted_data = row[i]
+									# print("2: ", converted_data, type(converted_data))
+								elif dtype == "VARCHAR":
+									# print(row[i])
+									# print(type(row[i]))
+									converted_data = str(row[i])
+									# if col == "password":
+									# print(converted_data)
+									# print(type(converted_data))
+								elif dtype == "BIT":
+									###get col type from schema attribute 
+									mysql_col_type = self.schema.get_col_type_from_schema_attribute(table, col)
+									if mysql_col_type == "tinyint(1)":
+										binary_num = row[i]
+										# print(type(binary_str))
+										converted_data = binary_num.to_bytes(len(str(binary_num)), byteorder="big")
+										# print(converted_data)
+									else:
+										converted_data = row[i]
+								# elif dtype == "YEAR":
+									# print(row[i], type(row[i]))
+								elif target_dtype == mongodb_dtype["decimal"]:
+									converted_data = Decimal128(row[i])
+								elif target_dtype == mongodb_dtype["object"]:
+									if type(row[i]) is str:
+										# converted_data = [row[i]]
+										converted_data = row[i]
+									else:
+										converted_data = tuple(row[i])
+										# converted_data = list(row[i])
+									# converted_data = row[i]
+									# print(row[i], converted_data)
+									# print(type(row[i]), type(converted_data))
+								# elif target_dtype == mongodb_dtype["integer"]:
+								# 		converted_data = row[i]
 								else:
-									converted_data = tuple(row[i])
-								# converted_data = row[i]
-								# print(row[i], converted_data)
-								# print(type(row[i]), type(converted_data))
-							elif dtype == "VARCHAR":
-								# print(row[i])
-								# print(type(row[i]))
-								converted_data = str(row[i])
-								# if col == "password":
-								# print(converted_data)
-								# print(type(converted_data))
-							else:
-								converted_data = row[i]
-							data[col_fetch_seq[i]] = converted_data 
+									converted_data = row[i]
+							# if not null_flag:
+								data[col_fetch_seq[i]] = converted_data 
 						# print(data)
 						rows.append(data)
+					# print(type(rows[0]["location"]))
 					db_cursor.close()
 					#assign to obj
 					#store to mongodb
@@ -249,7 +279,8 @@ class MySQL2MongoDB:
 			new_reference["$ref"] = original_collection_name
 			new_reference["$id"] = new_referenced_key_dict[key]
 			new_reference["$db"] = self.schema_conv_output_option.dbname
-			referencing_documents.update_many({referencing_key: key}, update={"$set": {referencing_key: new_reference}})
+			referencing_key_new_name = "db_ref_" + referencing_key
+			referencing_documents.update_many({referencing_key: key}, update={"$set": {referencing_key_new_name: new_reference}})
 
 
 	# def convert_one_relation_to_reference(self, original_collection_name, referencing_collection_name, original_key, referencing_key):

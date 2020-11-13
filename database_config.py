@@ -1,7 +1,10 @@
-
+# database_config.py: Classes which are used for construct database connection
 
 class ConvInitOption:
-	"""docstring for DataConvInitOption"""
+	"""
+	Class Conversion Initialized Connection Option.
+	This class is usually used for MySQL connection.
+	"""
 	def __init__(self, host, username, password, port, dbname):
 		super(ConvInitOption, self).__init__()
 		self.host = host
@@ -12,7 +15,10 @@ class ConvInitOption:
 		self.dbname = dbname
 
 class ConvOutputOption:
-	"""docstring for DataConvOutputOption"""
+	"""
+	Class Conversion Output Connection Option.
+	This class is usually used for MongoDB connection.
+	"""
 	def __init__(self, host, username, password, port, dbname):
 		super(ConvOutputOption, self).__init__()
 		self.host = host

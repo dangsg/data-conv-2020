@@ -1,6 +1,8 @@
 import mysql.connector
 from mysql.connector import Error
 from pymongo import MongoClient
+from bson import Decimal128
+import datetime
 
 def write_file(data, filename):
     # Convert binary data to proper format and write it on Hard Disk
@@ -88,12 +90,12 @@ def update_mongo():
         print("Error while connecting to MongoDB", e)
         raise e
 
-update_mongo()
-my = readBLOB()
-mon = update_mongo()
-print(my == mon)
-print(type(my), type(mon))
-print(len(my), len(mon))
+# update_mongo()
+# my = readBLOB()
+# mon = update_mongo()
+# print(my == mon)
+# print(type(my), type(mon))
+# print(len(my), len(mon))
 # print(my)
 
 def read_loc():
@@ -159,3 +161,33 @@ def mongodb_point():
         print("Error while connecting to MongoDB", e)
         raise e
 # mongodb_point()
+
+def check_validation():
+    connection_string = f"mongodb://localhost:27017/"
+    try:
+        # Making connection 
+        mongo_client = MongoClient(connection_string)  
+        # Select database  
+        db_connection = mongo_client["sakila"]        
+        col = db_connection["film"]
+        document = {
+        'film_id': 12112, 
+        'title': 'ACADEMY DINOSAUR', 
+        'description': 'A Epic Drama of a Feminist And a Mad Scientist who must Battle a Teacher in The Canadian Rockies', 
+        'release_year': 2006, 
+        'language_id': 1, 
+        'original_language_id': 0, 
+        'rental_duration': 6, 
+        'rental_rate': Decimal128('0.99'), 
+        'length': 86, 
+        'replacement_cost': Decimal128('20.99'), 
+        'rating': 'PG', 
+        'special_features': ['Behind the Scenes', 'Deleted Scenes'], 
+        'last_update': datetime.datetime(2006, 2, 15, 5, 3, 42)
+        }
+        col.insert_one(document)
+    except Exception as e:
+        print("Error while connecting to MongoDB", e)
+        raise e
+
+check_validation()

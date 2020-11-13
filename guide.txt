@@ -1,0 +1,25 @@
+schema validate # need to retrieve all data type, need to apply for view  
+- enum # done
+- constraint 
+
+create index 
+
+*not handled
+- trigger
+
+1. gioi thieu de tai
+2. cac noi dung nghien cuu
+	2.1 rdbms
+	2.2 nosql
+	2.3 cac cong trinh chuyen doi
+3. noi dung thuc hien
+	mo hinh chuyen doi (schema, migration,...)
+	3.1 trich xuat schema
+	3.2 luu tru schema
+	3.3 mapping schema (for validating)
+	3.4 create index
+	3.5 migrate data
+		3.5.1 write editing db into log file;
+	3.6 convert relation
+		3.6.1 add a field to referencing doc for relation 
+4. ket luan
