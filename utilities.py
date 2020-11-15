@@ -43,7 +43,7 @@ def import_json_to_mongodb(db_connection, collection_name, dbname, json_filename
 		# If JSON contains data more than one entry 
 		# insert_many is used else inser_one is used 
 		if isinstance(table_data, list): 
-			Collection.insert_many(table_data)   
+			Collection.insert_many(table_data, ordered=False)   
 		else: 
 			Collection.insert_one(table_data) 
 		return True
@@ -61,7 +61,7 @@ def store_json_to_mongodb(mongodb_connection, collection_name, json_data):
 		# Created or switched to collection  
 		Collection = mongodb_connection[collection_name]
 		if isinstance(json_data, list): 
-		    Collection.insert_many(json_data)   
+		    Collection.insert_many(json_data, ordered=False)   
 		else: 
 		    Collection.insert_one(json_data)
 		print(f"Write JSON data to MongoDB collection {collection_name} successfully!") 

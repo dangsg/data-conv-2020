@@ -1,9 +1,10 @@
 import sys, json, bson, re
 from schema_conversion import SchemaConversion
-from utilities import open_connection_mysql, open_connection_mongodb, import_json_to_mongodb, extract_dict, store_json_to_mongodb
+from utilities import open_connection_mysql, open_connection_mongodb, import_json_to_mongodb, extract_dict, store_json_to_mongodb, load_mongodb_collection
 from bson.decimal128 import Decimal128
 from decimal import Decimal
 from bson import BSON
+from datetime import datetime
 	
 class DataConversion:
 	"""
@@ -30,11 +31,12 @@ class DataConversion:
 
 	def run(self):
 		self.__save()
-		self.validate()
+		# self.validate()
 
 	def __save(self):
 		self.migrate_mysql_to_mongodb()
-		self.convert_relations_to_references()
+		self.validate()
+		# self.convert_relations_to_references()
 
 	def validate(self):
 		"""
@@ -51,6 +53,14 @@ class DataConversion:
 
 		mysql_connection = self.create_validated_database()
 		self.create_validated_tables(mysql_connection)
+		self.migrate_mongodb_to_mysql(mysql_connection)
+		# self.migrate_mongodb_to_mysql(mysql_connection)
+		# self.migrate_mongodb_to_mysql(mysql_connection)
+
+		db_schema = self.schema.get()
+		table_info_list = self.get_table_info_list()
+		for table_info in table_info_list:
+			self.alter_one_table(mysql_connection, table_info)
 
 		if mysql_connection.is_connected():
 			mysql_connection.close()
@@ -112,6 +122,8 @@ class DataConversion:
 				key: "nullable", value: <nullable option>,
 				key: "default-value", value: <default value>,
 				key: "column-width", value: <column width>,
+				key: "character-set-name", value: <character set name>,
+				key: "collation-name", value: <collation name>,
 			)
 		]
 		"""
@@ -124,6 +136,8 @@ class DataConversion:
 				"column-name": column_name,
 				"table-name": table_name,
 				"column-type": column_schema["attributes"]["COLUMN_TYPE"],
+				"character-set-name": column_schema["attributes"]["CHARACTER_SET_NAME"],
+				"collation-name": column_schema["attributes"]["COLLATION_NAME"],
 				"auto-incremented": column_schema["auto-incremented"],
 				"nullable": column_schema["nullable"],
 				"default-value": self.get_column_default_value(column_schema),
@@ -171,14 +185,16 @@ class DataConversion:
 					column_data_types_list.append(prefix_suffix_info)
 		return column_data_types_list
 
+		
 
 	def create_validated_tables(self, mysql_connection):
 		db_schema = self.schema.get()
 		table_info_list = self.get_table_info_list()
 		for table_info in table_info_list:
 			self.create_one_table(mysql_connection, table_info)
-		### alter table
-		pass
+		# for table_info in table_info_list:
+			# self.alter_one_table(mysql_connection, table_info)
+
 
 	def create_one_table(self, mysql_connection, table_info):
 		columns_info_list = list(filter(lambda column_info: column_info["uuid"] in table_info["columns-uuid-list"], self.get_columns_info()))
@@ -186,18 +202,31 @@ class DataConversion:
 
 		#sql create column
 		sql_creating_columns_cmd = ",\n".join([self.generate_sql_creating_column(column_info) for column_info in columns_info_list])
-		#sql create key
+		#sql create primary key
 		sql_creating_key_cmd = self.generate_sql_creating_key(primary_key_info)
 
 		sql_creating_columns_and_key_cmd = sql_creating_columns_cmd + ",\n" + sql_creating_key_cmd 
 		#sql create table
-		sql_creating_table_cmd = f"""CREATE TABLE {table_info["table-name"]} (\n{sql_creating_columns_and_key_cmd}\n) ENGINE={table_info["engine"]} DEFAULT CHARSET={table_info["table-collation"]};"""
+		sql_creating_table_cmd = f"""CREATE TABLE {table_info["table-name"]} (\n{sql_creating_columns_and_key_cmd}\n) ENGINE={table_info["engine"]}"""# DEFAULT CHARSET={table_info["table-collation"]};"""
 		# print(sql_creating_table_cmd)
 		
 		# create table
 		mycursor = mysql_connection.cursor()
 		mycursor.execute(sql_creating_table_cmd)
 		mycursor.close()
+
+	def alter_one_table(self, mysql_connection, table_info):
+		"""
+		Add foreign key constraints
+		"""
+		fk_constraints_list = self.get_table_constraint_info_list(table_info["uuid"])
+		# sql creating constraint 
+		sql_creating_fk_cmd = ",\n".join(self.generate_sql_foreign_keys_list(fk_constraints_list))
+		if len(sql_creating_fk_cmd) > 0:
+			sql_altering_table_cmd = f"""ALTER TABLE {table_info["table-name"]} {sql_creating_fk_cmd};"""
+			mycursor = mysql_connection.cursor()
+			mycursor.execute(sql_altering_table_cmd)
+			mycursor.close()
 
 	def generate_sql_creating_column(self, column_info):
 		"""
@@ -223,6 +252,10 @@ class DataConversion:
 			sql_cmd_list.append(f"""default {column_info["default-value"]}""")
 		if column_info["auto-incremented"] is True:
 			sql_cmd_list.append("AUTO_INCREMENT")
+		# if column_info["character-set-name"] is not None:
+		# 	sql_cmd_list.append(f"""CHARACTER SET {column_info["character-set-name"]}""")
+		# if column_info["collation-name"] is not None:
+			# sql_cmd_list.append(f"""COLLATE {column_info["collation-name"]}""")
 
 		sql_cmd = " ".join(sql_cmd_list)
 		return sql_cmd
@@ -242,6 +275,31 @@ class DataConversion:
 		sql_creating_key = f"""PRIMARY KEY ({", ".join(columns_in_pk_list)})"""
 		return sql_creating_key
 
+	def generate_sql_foreign_keys_list(self, fk_info_list):
+		"""
+		Return list of SQL command for creating foreign key constraints
+		Foreign key info like this:
+		Dict(
+				"name": <fk name>,
+				"column-references": List[
+					Dict(
+						"fk-uuid": <foreign key column uuid>,
+						"pk-uuid": <primary key column uuid>,
+					)],
+				"delete-rule": <delete rule>,
+				"update-rule": <update rule>
+			)
+		"""
+		coluuid_colname_dict = self.schema.get_columns_dict()
+		coluuid_tablename_dict = self.schema.get_tables_dict()
+		sql_fk_cmd_list = []
+		for fk_info in fk_info_list:
+			col_ref = fk_info["column-references"][0]
+			fk_col = coluuid_colname_dict[col_ref["fk-uuid"]]
+			pk_col = coluuid_colname_dict[col_ref["pk-uuid"]]
+			pk_tabl = coluuid_tablename_dict[col_ref["pk-uuid"]]
+			sql_fk_cmd_list.append(f"""ADD CONSTRAINT {fk_info["name"]} FOREIGN KEY ({fk_col}) REFERENCES {pk_tabl} ({pk_col}) ON DELETE {fk_info["delete-rule"]} ON UPDATE {fk_info["update-rule"]}""")
+		return sql_fk_cmd_list
 
 	def parse_mysql_data_type(self, dtype, width):
 		"""
@@ -280,7 +338,6 @@ class DataConversion:
 					return res
 		return None
 
-
 	def get_table_info_list(self):
 		"""
 		List[
@@ -307,7 +364,7 @@ class DataConversion:
 					"uuid": table_schema["@uuid"],
 					"table-name": table_schema["name"],
 					"engine": table_schema["attributes"]["ENGINE"],
-					"table-collation": table_schema["attributes"]["TABLE_COLLATION"].split("_")[0],
+					# "table-collation": table_schema["attributes"]["TABLE_COLLATION"].split("_")[0],
 					"columns-uuid-list": table_schema["columns"],
 					"primary-key-uuid": table_schema["primary-key"]
 				}
@@ -358,11 +415,233 @@ class DataConversion:
 						indexes_info_list.append(index_info)
 		return indexes_info_list
 
-	def migrate_mongodb_to_mysql(self):
-		pass
+	def get_table_constraint_info_list(self, table_uuid):
+		"""
+		Get constraint info list from schema
+		List[<foreign key info>]
+		"""
+		table_constraints_info = []
+		foreign_key_list = self.get_foreign_keys_list()
+		db_schema = self.schema.get()
+		table_schema = list(filter(lambda table_schema: table_schema["@uuid"] == table_uuid, db_schema["catalog"]["tables"]))[0]
+		table_constraints_list = list(filter(lambda tbl_constr: type(tbl_constr) is dict, table_schema["table-constraints"]))
+		table_constraint_name_list = list(map(lambda tbl_constr: tbl_constr["name"], table_constraints_list))
+		res = list(filter(lambda fk_info: fk_info["name"] in table_constraint_name_list, foreign_key_list))
+		return res
+
+	def get_foreign_keys_list(self):
+		"""
+		Get list of foreign keys info list
+		List[
+			Dict(
+				"uuid": <fk uuid>,
+				"name": <fk name>,
+				"column-references": List[
+					Dict(
+						"fk-uuid": <foreign key column uuid>,
+						"pk-uuid": <primary key column uuid>,
+					)],
+				"delete-rule": <delete rule>,
+				"update-rule": <update rule>
+			)
+		]
+		"""
+		db_schema = self.schema.get()
+		fk_keys_list = []
+		for table_schema in db_schema["catalog"]["tables"]:
+			for fk_schema in table_schema["foreign-keys"]:
+				if type(fk_schema) is dict:
+					col_refs = []
+					for col_ref in fk_schema["column-references"]:
+						col_refs.append({
+							"fk-uuid": col_ref["foreign-key-column"],
+							"pk-uuid": col_ref["primary-key-column"],
+							})
+					fk_info = {
+						# "uuid": fk_schema["@uuid"],
+						"name": fk_schema["name"],
+						"delete-rule": fk_schema["delete-rule"],
+						"update-rule": fk_schema["update-rule"],
+						"column-references": col_refs
+					}
+					fk_keys_list.append(fk_info)
+		return fk_keys_list
+
+	def migrate_mongodb_to_mysql(self, mysql_connection):
+		"""
+		Migrate data from MongoDB back to MySQL
+		"""
+		for collection_name in self.schema.get_tables_name_list():
+			self.migrate_one_collection_to_table(mysql_connection, collection_name)
+
+	def migrate_one_collection_to_table(self, mysql_connection, collection_name):
+		datas = load_mongodb_collection(
+			self.schema_conv_output_option.host, 
+			self.schema_conv_output_option.port, 
+			self.schema_conv_output_option.dbname, 
+			collection_name
+		)
+		db_schema = self.schema.get()
+		col_dict = self.schema.get_columns_dict()
+		table_coluuid_list = list(filter(lambda table_schema: table_schema["name"] == collection_name, db_schema["catalog"]["tables"]))[0]["columns"]
+		columns_name_list = [col_dict[col_uuid] for col_uuid in table_coluuid_list]
+		columns_num = len(columns_name_list)
+
+		columns_name_sql = ["%s"] * columns_num
+		cols_info = list(filter(lambda col_inf: col_inf["table-name"] == collection_name, self.get_columns_info()))
+		for i in range(len(columns_name_sql)):
+			for col_info in cols_info:
+				if col_info["column-name"] == columns_name_list[i]:
+					if col_info["column-type"][:8] == "geometry":
+						columns_name_sql[i] = f"GeomFromText({columns_name_sql[i]})"
+						break
+
+		mycursor = mysql_connection.cursor()
+		sql = f"""INSERT IGNORE INTO {collection_name} ({", ".join(columns_name_list)}) VALUES ({", ".join(columns_name_sql)})"""
+		# val = [[data[key] for key in columns_name_list] for data in datas]
+		val = []
+		for data in datas:
+			row = []
+			for key in columns_name_list:
+				if key in data.keys():
+					dtype = type(data[key])
+					if dtype is Decimal128:
+						cell_data = data[key].to_decimal()
+					elif dtype is list:
+						# return
+						cell_data = ",".join(data[key])
+					elif dtype is dict:
+						print(data[key])
+						return
+					else:
+						cell_data = data[key]
+				else:
+					cell_data = None
+				row.append(cell_data)
+			val.append(row)
+		mycursor.executemany(sql, val)
+		mysql_connection.commit()
+		print("Insert done!")		
+
+
+	def specify_sequence_of_migrating_tables(self):
+		"""
+		Specify sequence of migrating tables from MySQL. The sequence must guarantee all tables and data within them will be migrated effectively and efficiently.
+		We will make a tree to determine which order each table should have.
+		Result will be a dictionary which have tables' names as key and orders in sequence as values.
+		The lower mark table have, the higher order get, and data of it will be migrate previously.
+		"""
+		db_schema = self.schema.get()
+		tables_schema = db_schema["catalog"]["tables"]
+		tables_relations = self.schema.get_tables_relations()
+		# print(tables_relations)
+		# return
+		tables_name_list = self.schema.get_tables_name_list()
+
+		refering_tables_set = set(map(lambda ele: ele["foreign_key_table"], tables_relations.values()))
+		root_nodes = set(tables_name_list) - refering_tables_set
+
+		node_seq = dict.fromkeys(tables_name_list, -1)
+		node_seq.update(dict.fromkeys(root_nodes, 0))
+
+		# Eliminate self reference relation
+		tables_relations_list = list(filter(lambda rel: rel["primary_key_table"] != rel["foreign_key_table"], list(tables_relations.values())))
+		# print(tables_relations_list)
+		# return
+		# print(node_seq)
+		current_mark = 0
+		lowest_nodes_set = root_nodes 
+		current_rels = list(filter(lambda rel: rel["primary_key_table"] in lowest_nodes_set, tables_relations_list))
+		print(lowest_nodes_set)
+		while len(current_rels) > 0:
+			current_mark = current_mark + 1
+			lowest_nodes_set = set(map(lambda rel: rel["foreign_key_table"], current_rels))
+			print(lowest_nodes_set)
+			if(current_mark) == 4:
+				return
+			for node in lowest_nodes_set:
+				node_seq[node] = current_mark
+			current_rels = list(filter(lambda rel: rel["primary_key_table"] in lowest_nodes_set, tables_relations_list))
+			# print(len(current_rels))
+		return
+
+
+		# def update_seq_list(seq_list, pk_table, fk_table):
+		# 	if pk_table in seq_list:
+		# 		pk_idx = seq_list.index(pk_table)
+		# 		if fk_table in seq_list:
+		# 			fk_idx = seq_list.index(fk_table)
+		# 			if pk_idx > fk_idx:
+		# 				seq_list = swap_seq_list(seq_list, fk_idx, pk_idx)
+		# 				seq_list = seq_list[:fk_idx] + seq_list[fk_idx+1:pk_idx+1] + [fk_table] + seq_list[pk_idx+1:] 
+		# 		else: 
+		# 			seq_list = seq_list[:pk_idx+1] + [fk_table] + seq_list[pk_idx+1:]
+		# 	else:
+		# 		if fk_table in seq_list:
+		# 			fk_idx = seq_list.index(fk_table)	
+		# 			seq_list = seq_list[:fk_idx] + [pk_table] + seq_list[fk_idx+1:]
+		# 		else:
+		# 			seq_list = seq_list + [pk_table, fk_table]
+		# 	return seq_list
+		# seq_list = list(root_nodes)
+		# for rel in tables_relations_list:
+		# 	seq_list = update_seq_list(seq_list, rel["primary_key_table"], rel["foreign_key_table"])
+		# print(seq_list)
+		# return
+		# current_mark = 0
+		# while(current_mark <= max(node_seq.values())):
+		# 	source_nodes = set(filter(lambda key: node_seq[str(key)] == current_mark, node_seq.keys()))
+		# 	# print(source_nodes)
+		# 	# return
+		# 	for source_node in source_nodes:
+		# 		for direction in tables_relations_list:
+		# 			if(direction["primary_key_table"] == source_node):
+		# 				if(node_seq[direction["foreign_key_table"]] < current_mark + 1):
+		# 					node_seq[direction["foreign_key_table"]] = current_mark + 1
+		# 				direction["primary_key_table"] = None #TODO: Find a more effective way to eliminate retrieved nodes
+		# 	current_mark = current_mark + 1
+		# print(node_seq)
+
+		# table_seq = {} 
+		# for i in range(current_mark):
+		# 	table_seq[str(i)] = []
+		# 	for key in list(node_seq):
+		# 		if node_seq[key] == i:
+		# 			table_seq[str(i)] = table_seq[str(i)] + [key]
+		# return table_seq 
 
 	def evaluate_validating(self):
-		pass	
+		ori_conn = open_connection_mysql(
+			self.schema_conv_init_option.host, 
+			self.schema_conv_init_option.username, 
+			self.schema_conv_init_option.password,
+			self.schema_conv_init_option.dbname
+			)
+		ori_cur = ori_conn.cursor()
+
+		val_conn = open_connection_mysql(
+			self.schema_conv_init_option.host, 
+			self.schema_conv_init_option.username, 
+			self.schema_conv_init_option.password,
+			self.validated_dbname
+			)
+		val_cur = val_conn.cursor()
+
+		mongodb_conn = open_connection_mongodb(
+			self.schema_conv_output_option.host, 
+			self.schema_conv_output_option.port,
+			self.schema_conv_output_option.dbname)
+
+		for table in self.schema.get_tables_name_list():
+			mongo_count = mongodb_conn[table].count() 
+			sql = f"select count(*) from {table};"
+			ori_cur.execute(sql)
+			val_cur.execute(sql)
+			ori_data = ori_cur.fetchall()	
+			val_data = val_cur.fetchall()	
+			print(ori_data[0][0], mongo_count, val_data[0][0])
+
+
 
 	def find_target_dtype(self, mysql_dtype, dtype_dict, mongodb_dtype):
 		"""
@@ -452,29 +731,35 @@ class DataConversion:
 							target_dtype = self.find_target_dtype(dtype, dtype_dict, mongodb_dtype)
 							#generate SQL
 							if row[i] != None:
+								# if dtype == "GEOMETRY":
+								# 	geodata = [float(num) for num in row[i][6:-1].split()]
+								# 	geo_x, geo_y = geodata[:2]
+								# 	if geo_x > 180 or geo_x < -180:
+								# 		geo_x = 0
+								# 	if geo_y > 90 or geo_y < -90:
+								# 		geo_y = 0
+								# 	converted_data = {
+								# 		"type": "Point",
+								# 		"coordinates": [geo_x, geo_y]
+								# 	}
 								if dtype == "GEOMETRY":
-									geodata = [float(num) for num in row[i][6:-1].split()]
-									geo_x, geo_y = geodata[:2]
-									if geo_x > 180 or geo_x < -180:
-										geo_x = 0
-									if geo_y > 90 or geo_y < -90:
-										geo_y = 0
-									converted_data = {
-										"type": "Point",
-										"coordinates": [geo_x, geo_y]
-									}
+									converted_data = row[i]
 								elif dtype == "VARCHAR":
 									converted_data = str(row[i])
 								elif dtype == "BIT":
 									###get col type from schema attribute 
-									mysql_col_type = self.schema.get_col_type_from_schema_attribute(table, col)
-									if mysql_col_type == "tinyint(1)":
-										binary_num = row[i]
-										converted_data = binary_num.to_bytes(len(str(binary_num)), byteorder="big")
-									else:
-										converted_data = row[i]
+									# mysql_col_type = self.schema.get_col_type_from_schema_attribute(table, col)
+									# if mysql_col_type == "tinyint(1)":
+									# 	binary_num = row[i]
+									# 	converted_data = binary_num.to_bytes(len(str(binary_num)), byteorder="big")
+									# else:
+									# 	converted_data = row[i]
+									converted_data = row[i]
 								# elif dtype == "YEAR":
 									# print(row[i], type(row[i]))
+								elif dtype == "DATE":
+									# print(row[i], type(row[i]))
+									converted_data = datetime(row[i].year, row[i].month, row[i].day)
 								elif target_dtype == mongodb_dtype["decimal"]:
 									converted_data = Decimal128(row[i])
 								elif target_dtype == mongodb_dtype["object"]:

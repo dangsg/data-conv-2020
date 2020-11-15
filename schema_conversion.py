@@ -269,17 +269,17 @@ class SchemaConversion:
 		Output: MongoDB data type.
 		"""
 		dtype_dict = {}
-		dtype_dict["int"] = ["TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "YEAR"] 
+		dtype_dict["int"] = ["BIT", "TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "YEAR", "BOOL", "BOOLEAN"] 
 		dtype_dict["long"] = ["BIGINT"]
 		dtype_dict["decimal"] = ["DECIMAL", "DEC", "FIXED"]
 		dtype_dict["double"] = ["FLOAT", "DOUBLE", "REAL"]
-		dtype_dict["bool"] = ["BOOL", "BOOLEAN"]
+		# dtype_dict["bool"] = []
 		dtype_dict["date"] = ["DATE", "DATETIME", "TIMESTAMP", "TIME"]
 		# dtype_dict["timestamp"] = []
-		dtype_dict["binData"] = ["BIT", "BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
+		dtype_dict["binData"] = ["BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
 		# dtype_dict["blob"] = []
-		dtype_dict["string"] = ["CHARACTER", "CHARSET", "ASCII", "UNICODE", "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT"]
-		dtype_dict["object"] = ["ENUM", "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"]
+		dtype_dict["string"] = ["CHARACTER", "CHARSET", "ASCII", "UNICODE", "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"]
+		dtype_dict["object"] = ["ENUM"]
 		dtype_dict["array"] = ["SET"]
 		# dtype_dict["single-geometry"] = []
 		# dtype_dict["multiple-geometry"] = []
@@ -342,23 +342,23 @@ class SchemaConversion:
 							# for idx_uuid in index_cols:
 								# index_keys[col_dict[idx_uuid]] = 1
 							collection.create_index([(col_dict[idx_uuid], 1) for idx_uuid in index_cols], unique = index_unique)
-					elif index_type == "SPATIAL":
-						# mongo_index_type = "spatial"
-						# print(col_dict[index_cols[0]])
-						if num_sub_index == 1:
-							# collection.create_index([(col_dict[index_cols[0]], GEO2D)], unique = index_unique)
-							collection.create_index([(col_dict[index_cols[0]], "2dsphere")], unique = index_unique)
-						else:
-							collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
-						pass
-					elif index_type == "FULLTEXT":
-						# mongo_index_type = "text-index"
-						if num_sub_index == 1:
-							collection.create_index(col_dict[index_cols[0]], TEXT, unique = index_unique)
-						else:
-							collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
-					else:
-						print(f"MySQL index type {index_type} has not been handled!")
+					# elif index_type == "SPATIAL":
+					# 	# mongo_index_type = "spatial"
+					# 	# print(col_dict[index_cols[0]])
+					# 	if num_sub_index == 1:
+					# 		# collection.create_index([(col_dict[index_cols[0]], GEO2D)], unique = index_unique)
+					# 		collection.create_index([(col_dict[index_cols[0]], "2dsphere")], unique = index_unique)
+					# 	else:
+					# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
+					# 	pass
+					# elif index_type == "FULLTEXT":
+					# 	# mongo_index_type = "text-index"
+					# 	if num_sub_index == 1:
+					# 		collection.create_index(col_dict[index_cols[0]], TEXT, unique = index_unique)
+					# 	else:
+					# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
+					# else:
+						# print(f"MySQL index type {index_type} has not been handled!")
 
 
 	# def get_coluuid(self, table_name, col_name):
