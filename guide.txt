@@ -22,4 +22,12 @@ create index
 		3.5.1 write editing db into log file;
 	3.6 convert relation
 		3.6.1 add a field to referencing doc for relation 
-4. ket luan
+4. danh gia bo chuyen doi
+5. trien khai he thong
+6. ket luan
+
+###
+handle later:
+table_schema -> foreign keys
+
+https://stackoverflow.com/questions/11618277/difference-between-schema-database-in-mysql

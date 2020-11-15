@@ -19,16 +19,15 @@ if __name__ == '__main__':
 	mongodb_dbname = 'sakila'
 	schema_conv_output_option = ConvOutputOption(host = mongodb_host, username = mongodb_username, password = mongodb_password, port = mongodb_port, dbname = mongodb_dbname)
 
-	schema_conversion = SchemaConversion()
-	schema_conversion.set_config(schema_conv_init_option, schema_conv_output_option)
-	# schema_conversion.run()
-	# schema = schema_conversion.get()
-	
+	mysql_database_schema = SchemaConversion(schema_conv_init_option, schema_conv_output_option)
+	mysql_database_schema.drop_mongodb()
+	# mysql_database_schema.generate_mysql_schema()
+	# mysql_database_schema.save_schema()
+	# mysql_database_schema.load_schema()
+	mysql_database_schema.convert_to_mongo_schema()
+	mysql_database_schema.convert_index()
 
-	mysql2mongodb = DataConversion()
-	mysql2mongodb.set_config(schema_conv_init_option, schema_conv_output_option, schema_conversion)
-	# mysql2mongodb.run()
+	mysql2mongodb = DataConversion(schema_conv_init_option, schema_conv_output_option, mysql_database_schema)
+	mysql2mongodb.migrate_mysql_to_mongodb()
+	mysql2mongodb.convert_relations_to_references()
 
-	mysql2mongodb.validate()
-
-	print("Done!")

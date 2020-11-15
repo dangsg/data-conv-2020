@@ -39,3 +39,48 @@ def specify_sequence_of_migrating_tables(schema_file):
 					table_seq[str(i)] = table_seq[str(i)] + [key]
 		return table_seq 
 
+def fetch_table_rows(self, db_connection, table_name):
+		"""
+		Fetch all rows of specific table
+		"""
+		db_cursor = db_connection.cursor();
+		db_cursor.execute("SELECT * FROM " + table_name)
+		fetched_data = db_cursor.fetchall()
+		rows = []
+		for row in fetched_data:
+			rows.append(row)
+		db_cursor.close()
+		return rows
+
+
+	def fetch_table_columns(self, db_connection, table_name):
+		"""Fetch columns/attribute of table"""
+		db_cursor = db_connection.cursor()
+		db_cursor.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '" + table_name + "'")
+		fetched_data = db_cursor.fetchall()
+		columns = []
+		for column in fetched_data:
+			columns.append(column[0])
+		db_cursor.close()
+		return columns
+
+
+	def convert_fetched_data_to_json(self, table_name, rows, columns):
+		"""Convert data from table to json"""
+		dataset = []
+		# print(table_name)
+		for row in rows:
+			row_dict = {}
+			for i in range(len(columns)):
+				data = self.convert_to_bson(row[i], columns[i])
+				row_dict[columns[i]] = data
+			dataset.append(row_dict)
+		json_data = {}
+		json_data["table"] = table_name
+		json_data["data"] = dataset
+		return json_data
+
+	def convert_to_bson(self, data, col):
+		if type(data) is bytearray:
+			print(data, col)
+		return data

@@ -1,9 +1,9 @@
-import json, os
+import json, os, re
 from collections import OrderedDict
 from pymongo import GEO2D, TEXT
-from utilities import extract_dict, import_json_to_mongodb, open_connection_mongodb, open_connection_mysql, drop_mongodb_database
+from utilities import extract_dict, import_json_to_mongodb, open_connection_mongodb, open_connection_mysql, drop_mongodb_database, load_mongodb_collection, store_json_to_mongodb
 	
-class MySQLDatabaseSchema:
+class SchemaConversion:
 	"""
 	MySQL Database Schema class.
 	This class is used for
@@ -16,43 +16,61 @@ class MySQLDatabaseSchema:
 	All above processes are belong to phase "Schema Conversion".
 	"""
 
-	def __init__(self, schema_conv_init_option, schema_conv_output_option):
-		"""
-		To construct an instance of this class, you need to provide:
-			- schema_conv_init_option: instance of class ConvInitOption, which specified connection to "Input" database (MySQL).
-			- schema_conv_output_option: instance of class ConvOutputOption, which specified connection to "Out" database (MongoDB).
-		"""
-
-		super(MySQLDatabaseSchema, self).__init__()
-
+	def __init__(self):
+		super(SchemaConversion, self).__init__()
 		# Define a name for schema file, which will be place at intermediate folder.
 		self.schema_filename = "schema.json"
 
-		# Keep connections as instance's attributes for re-use.
+	def set_config(self, schema_conv_init_option, schema_conv_output_option):
+		"""
+		To set up connections, you need to provide:
+			- schema_conv_init_option:_ instance of class ConvInitOption, which specified connection to "Input" database (MySQL).
+			- schema_conv_output_option: instance of class ConvOutputOption, which specified connection to "Out" database (MongoDB).
+		"""
 		self.schema_conv_init_option = schema_conv_init_option
 		self.schema_conv_output_option = schema_conv_output_option
 
+	def run(self):
+		self.__drop_mongodb()
+		self.__generate_mysql_schema()
+		self.__save()
+		self.create_mongo_schema_validators()
+		self.create_mongo_indexes()
+		return True
 
-	def drop_mongodb(self):
-		"""
-		Drop a MongoDB database.
-		"""
-		drop_mongodb_database(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname)
+	def get(self):
+		self.load_schema()
+		return self.db_schema
 
+
+	def __save(self):
+		"""
+		Save MySQL schema which was generate by SchemaCrawler to MongoDB database
+		"""
+		db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
+		# print("Ready to write!")
+		import_json_to_mongodb(db_connection, collection_name="schema", dbname=self.schema_conv_output_option.dbname, json_filename=self.schema_filename)
+		print(f"Save schema from {self.schema_conv_output_option.dbname} database to MongoDB successfully!")
+		return True
+	
 
 	def load_schema(self):
 		"""
-		
+		Load schema from JSON file.
+		*Need to be edited for loading from MongoDB instead.
 		"""
 		if not hasattr(self, "db_schema"):
-			with open(f"./intermediate_data/{self.schema_conv_init_option.dbname}/{self.schema_filename}") as schema_file:
-				db_schema = json.load(schema_file)
-			self.db_schema = db_schema
+			db_schema = load_mongodb_collection(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname, "schema")
+			self.db_schema = db_schema[0]
+			# Most used variable
 			self.all_table_columns = self.db_schema["all-table-columns"]
 			self.tables_schema = self.db_schema["catalog"]["tables"]
 			self.extracted_tables_schema = self.extract_tables_schema()
 	
-	def generate_mysql_schema(self, info_level="maximum"):
+	def __generate_mysql_schema(self, info_level="maximum"):
+		"""
+		Generate MySQL schema using SchemaCrawler, then save as JSON file at intermediate directory.
+		"""
 		command_create_intermediate_dir = f"mkdir -p ./intermediate_data/{self.schema_conv_init_option.dbname}"
 		os.system(command_create_intermediate_dir)
 		command = f"schemacrawler.sh \
@@ -70,16 +88,20 @@ class MySQLDatabaseSchema:
 		print(f"Generate MySQL database {self.schema_conv_init_option.dbname} successfully!")
 		return True
 
-	def save_schema(self):
-		"""Save schema to MongoDB database"""
-		db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
-		# print("Ready to write!")
-		import_json_to_mongodb(db_connection, collection_name="schema", dbname=self.schema_conv_output_option.dbname, json_filename=self.schema_filename)
-		print(f"Save schema from {self.schema_conv_output_option.dbname} database to MongoDB successfully!")
-		return True
+
+	def __drop_mongodb(self):
+		"""
+		Drop a MongoDB database.
+		For development only.
+		"""
+		drop_mongodb_database(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname)
 
 	def extract_tables_schema(self, extracted_keys_list = ["@uuid", "name", "columns", "foreign-keys"]):
-		"""Extract only specific fields from tables schema""" 
+		"""
+		Extract only specific fields from tables schema.
+		Params:
+			extracted_keys_list: List of specific keys. 
+		""" 
 		ite_func = extract_dict(extracted_keys_list)
 		return list(map(ite_func, self.tables_schema))	
 
@@ -87,6 +109,7 @@ class MySQLDatabaseSchema:
 		"""
 		Extract column uuid and name from database schema
 		Return a dictionary with @uuid as key and column name as value
+		Dict(key: <column uuid>, value: <column name>)
 		"""
 		all_table_columns = self.db_schema["all-table-columns"]
 		col_dict = {}
@@ -98,6 +121,7 @@ class MySQLDatabaseSchema:
 		"""
 		Extract column uuid and its table name from database schema
 		Return a dictionary with @uuid as key and table name as value
+		Dict(key: <column uuid>, value: <name of table has that column>)
 		"""
 		table_dict = {}
 		for table in self.tables_schema:
@@ -112,6 +136,16 @@ class MySQLDatabaseSchema:
 		Result will be a dictionary which has uuids (of relation, defined by SchemaCrawler) as keys, and values including:
 		- source: Name of table which holds primary key of relation
 		- dest: Name of table which holds foreign key of relation
+		Dict(
+			key: <relation uuid>,
+			values: Dict(
+				"primary_key_table": <primary table name>,
+				"foreign_key_table": <foreign table name>,
+				"primary_key_column": <primary column name>,
+				"foreign_key_column": <foreign column name>
+			)
+
+		)
 		"""
 		col_dict = self.get_columns_dict()
 		table_dict = self.get_tables_dict()
@@ -124,30 +158,39 @@ class MySQLDatabaseSchema:
 					foreign_key_uuid = foreign_key["column-references"][0]["foreign-key-column"]
 					primary_key_uuid = foreign_key["column-references"][0]["primary-key-column"]
 					relations_dict[relation_uuid] = {}
-					relations_dict[relation_uuid]["source-table"] = table_dict[primary_key_uuid]
-					relations_dict[relation_uuid]["dest-table"] = table_dict[foreign_key_uuid]
-					relations_dict[relation_uuid]["source-column"] = col_dict[primary_key_uuid]
-					relations_dict[relation_uuid]["dest-column"] = col_dict[foreign_key_uuid]
-		# for table in self.extracted_tables_schema:
-			# for foreign_key in table["foreign-keys"]:
-				# if(isinstance(foreign_key, str)):
-					# relations_dict[str(foreign_key)]["source-table"] = table["name"]
-					# pass
-		# print(relations_dict)
+					relations_dict[relation_uuid]["primary_key_table"] = table_dict[primary_key_uuid]
+					relations_dict[relation_uuid]["foreign_key_table"] = table_dict[foreign_key_uuid]
+					relations_dict[relation_uuid]["primary_key_column"] = col_dict[primary_key_uuid]
+					relations_dict[relation_uuid]["foreign_key_column"] = col_dict[foreign_key_uuid]
 		return relations_dict
 
 	def get_tables_name_list(self):
-		"""Get list of name of all tables from table schema"""
+		"""
+		Get list of name of all tables.
+		"""
 		self.load_schema()
 		table_name_list = list(map(lambda table: table["name"], list(filter(lambda table: table["remarks"] == "", self.tables_schema))))
 		return table_name_list
 
 	def get_tables_and_views_list(self):
+		"""
+		Get list of name of all tables and views.
+		"""
 		self.load_schema()
 		table_and_view_name_list = list(map(lambda table: table["name"], self.extracted_tables_schema))
 		return table_and_view_name_list
 
 	def get_table_column_and_data_type(self):
+		"""
+		Get dict of tables, columns name and columns data type.
+		Dict(
+			key: <table name>
+			value: Dict(
+				key: <column name>
+				value: <MySQL column data type>
+			)
+		)
+		"""
 		self.load_schema()
 		table_dict = self.get_tables_dict()
 		all_columns = self.db_schema["all-table-columns"]
@@ -168,7 +211,10 @@ class MySQLDatabaseSchema:
 				res[table_dict[col["@uuid"]]][col["name"]] = schema_type_dict[dtype]
 		return res
 
-	def convert_to_mongo_schema(self):
+	def create_mongo_schema_validators(self):
+		"""
+		Specify MongoDB schema validator for all tables.
+		"""
 		table_view_column_dtype = self.get_table_column_and_data_type()
 		table_list = self.get_tables_name_list()
 		uuid_col_dict = self.get_columns_dict()
@@ -183,18 +229,13 @@ class MySQLDatabaseSchema:
 		enum_col_dict = {}
 		for col in self.all_table_columns:
 			if col["attributes"]["COLUMN_TYPE"][:4] == "enum":
-				# print(col["short-name"])
 				data = {}
 				table_name, col_name = col["short-name"].split(".")[:2]
 				if table_name in table_list:
-					# data = {}
-					# data[col_name] = col_name.
-					# print(table_name, col_name)
 					data = list(map(lambda ele: ele[1:-1], col["attributes"]["COLUMN_TYPE"][5:-1].split(",")))
 					sub_dict = {}
 					sub_dict[col_name] = data
 					enum_col_dict[table_name] = sub_dict
-		# for table in table_name_list:
 		db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
 		for table in self.get_tables_and_views_list():
 			db_connection.create_collection(table)
@@ -216,38 +257,17 @@ class MySQLDatabaseSchema:
 				json_schema = {}
 				json_schema["bsonType"] = "object"
 				json_schema["properties"] = props
-				# db_connection.drop_collection(table)
-				# db_connection.create_collection(table)
 				vexpr = {"$jsonSchema": json_schema}
 				cmd = OrderedDict([('collMod', table), ('validator', vexpr)])
 				db_connection.command(cmd)
-		# for table in table_list:
-		# 	#decl jsonSchema
-		# 	props = {}
-		# 	#for col in table
-		# 	cols_in_table = table_view_column_dtype[table]
-		# 	for col in cols_in_table:
-		# 		#add col details to jsonSchema
-		# 		mysql_dtype = cols_in_table[col]
-		# 		data = {}
-		# 		if(mysql_dtype == "ENUM"):
-		# 			# data["enum"] =
-		# 			pass 
-		# 		else:
-		# 		props[col] = data
-		# 	#add jsonSchema to db
-		# 	json_schema = {}
-		# 	json_schema["bsonType"] = "object"
-		# 	json_schema["properties"] = props
-		# 	db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
-		# 	db_connection.drop_collection(table)
-		# 	db_connection.create_collection(table)
-		# 	vexpr = {"$jsonSchema": json_schema}
-		# 	cmd = OrderedDict([('collMod', table),
-	 #        ('validator', vexpr)])
-		# 	db_connection.command(cmd)
+		
 
 	def data_type_schema_mapping(self, mysql_type):
+		"""
+		Mapping data type from MySQL to MongoDB.
+		Input: MySQL data type.
+		Output: MongoDB data type.
+		"""
 		dtype_dict = {}
 		dtype_dict["int"] = ["TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "YEAR"] 
 		dtype_dict["long"] = ["BIGINT"]
@@ -271,15 +291,18 @@ class MySQLDatabaseSchema:
 		print(f"MySQL data type {mysql_type} has not been handled!")
 		return None
 
-	def convert_index(self):
+	def create_mongo_indexes(self):
+		"""
+		Add index to MongoDB collection.
+		Just use for running time. Need to remove index before exporting MongoDB database.
+		"""
 		table_view_list = self.get_tables_and_views_list()
-		mysql_connection_info = {
-			"host": self.schema_conv_init_option.host, 
-			"username": self.schema_conv_init_option.username, 
-			"password": self.schema_conv_init_option.password, 
-			"database": self.schema_conv_init_option.dbname
-		}
-		mysql_connection = open_connection_mysql(mysql_connection_info)
+		mysql_connection = open_connection_mysql(
+			self.schema_conv_init_option.host, 
+			self.schema_conv_init_option.username, 
+			self.schema_conv_init_option.password, 
+			self.schema_conv_init_option.dbname, 
+			)
 		mysql_cursor = mysql_connection.cursor()
 		sql_fetch_index = f"SELECT DISTINCT TABLE_NAME, INDEX_NAME, INDEX_TYPE FROM INFORMATION_SCHEMA. STATISTICS;"
 		mysql_cursor.execute(sql_fetch_index)
@@ -295,12 +318,6 @@ class MySQLDatabaseSchema:
 						# print(idx_name)
 					idx_table_name_type_dict[table_name] = {}
 				idx_table_name_type_dict[table_name][idx_name] = idx_type
-		# print(idx_table_name_type_dict)
-		# #for table in table-view-list
-		# for table in table-view-list:
-	 #        sql_fetch_index = f"SELECT key_name, index_type from {} where staff_id = 1"
-		# 	#select index from table
-		# 	#update dict(key:table, val:dict(key: index_name, val:index_type))
 		col_dict = self.get_columns_dict()
 		mongodb_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
 		for table in self.tables_schema:
@@ -343,19 +360,26 @@ class MySQLDatabaseSchema:
 					else:
 						print(f"MySQL index type {index_type} has not been handled!")
 
-		# collection.drop_index("actor_id")
-		# collection.create_index("actor_id", unique = True)
-		# collection.create_index("some_field", unique = True)
 
-	def get_coluuid(self, table_name, col_name):
-		self.load_schema()
-		for col in self.all_table_columns():
-			if f"{table_name}.{col_name}" == col["short-name"]:
-				return col["@uuid"]
-		print(f"Can not find column {col_name} from table {table_name}!")
-		return None
+	# def get_coluuid(self, table_name, col_name):
+	# 	"""
+	# 	Get column uuid:
+	# 	Input: Table name and column name.
+	# 	Output: Column uuid
+	# 	"""
+	# 	self.load_schema()
+	# 	for col in self.all_table_columns():
+	# 		if f"{table_name}.{col_name}" == col["short-name"]:
+	# 			return col["@uuid"]
+	# 	print(f"Can not find column {col_name} from table {table_name}!")
+	# 	return None
 
 	def get_col_type_from_schema_attribute(self, table_name, col_name):
+		"""
+		Get MySQL column data type from schema.
+		Input: Table name and column name.
+		Output: MySQL data type of column.
+		"""
 		self.load_schema()
 		for col in self.all_table_columns:
 			if f"{table_name}.{col_name}" == col["short-name"]:

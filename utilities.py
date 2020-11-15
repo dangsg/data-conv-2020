@@ -34,6 +34,10 @@ def import_json_to_mongodb(db_connection, collection_name, dbname, json_filename
 		    table_data = file_data
 		    if import_dataset is True:
 			    table_data = file_data["data"]
+		    # else:
+		    	# table_data = {
+		    		# "auto_generated_schema": file_data
+		    	# }
 
 		# Inserting the json data in the Collection 
 		# If JSON contains data more than one entry 
@@ -100,17 +104,27 @@ def open_connection_mongodb(host, port, dbname):
 		print(e)
 		raise e
 
-def open_connection_mysql(connection_info):
+def load_mongodb_collection(host, port, dbname, collection_name):
+	"""
+	Load all documents from MongoDB collection.
+	"""
+	mongodb_connection = open_connection_mongodb(host, port, dbname)
+	collection = mongodb_connection[collection_name]
+	docs = collection.find()
+	res = [doc for doc in docs]
+	return res
+
+def open_connection_mysql(host, username, password, dbname = None):
 	"""
 	Set up a connection to MySQL database.
 	Return a MySQL (connector) connection object if success, otherwise None.
 	"""
 	try:
 		db_connection = mysql.connector.connect(
-			host=connection_info["host"], 
-			user=connection_info["username"], 
-			password=connection_info["password"], 
-			database=connection_info["database"]
+			host = host, 
+			user = username, 
+			password = password, 
+			database = dbname
 		)
 		if db_connection.is_connected():
 			db_info = db_connection.get_server_info()
@@ -124,3 +138,16 @@ def open_connection_mysql(connection_info):
 		print(f"Error while connecting to MySQL database {dbname}! Re-check connection or name of database.")
 		print(e)
 		raise e
+
+	# def write_json_to_file(self, json_data, filename):
+	# 	"""Write json data to file"""
+	# 	with open(f"./intermediate_data/{self.schema_conv_init_option.dbname}/{filename}", 'w') as outfile:
+	# 		json.dump(json_data, outfile, default=str)
+
+if __name__ == '__main__':
+	mongodb_host = 'localhost'
+	mongodb_username = ''
+	mongodb_password = ''
+	mongodb_port = '27017'
+	mongodb_dbname = 'sakila'
+	load_mongodb_collection(mongodb_host, mongodb_port, mongodb_dbname, "original_schema")
