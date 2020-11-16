@@ -23,15 +23,15 @@ if __name__ == '__main__':
 
 	schema_conversion = SchemaConversion()
 	schema_conversion.set_config(schema_conv_init_option, schema_conv_output_option)
-	# schema_conversion.run()
+	schema_conversion.run()
 	# schema = schema_conversion.get()
 	
 
 	mysql2mongodb = DataConversion()
 	mysql2mongodb.set_config(schema_conv_init_option, schema_conv_output_option, schema_conversion)
-	# mysql2mongodb.run()
+	mysql2mongodb.run()
 
-	# mysql2mongodb.validate()
-	mysql2mongodb.evaluate_validating()
+	mysql2mongodb.validate()
+	# mysql2mongodb.evaluate_validating()
 
 	print("Done!")

@@ -36,7 +36,7 @@ class DataConversion:
 	def __save(self):
 		self.migrate_mysql_to_mongodb()
 		self.validate()
-		# self.convert_relations_to_references()
+		self.convert_relations_to_references()
 
 	def validate(self):
 		"""
@@ -52,7 +52,12 @@ class DataConversion:
 		# 5 Evaluate 
 
 		mysql_connection = self.create_validated_database()
+
 		self.create_validated_tables(mysql_connection)
+		
+
+		# return
+
 		self.migrate_mongodb_to_mysql(mysql_connection)
 		# self.migrate_mongodb_to_mysql(mysql_connection)
 		# self.migrate_mongodb_to_mysql(mysql_connection)
@@ -62,9 +67,14 @@ class DataConversion:
 		for table_info in table_info_list:
 			self.alter_one_table(mysql_connection, table_info)
 
+		self.create_triggers(mysql_connection)
+
 		if mysql_connection.is_connected():
 			mysql_connection.close()
 			print("Disconnected to MySQL Server version ", mysql_connection.get_server_info())
+
+
+		self.evaluate_validating()
 
 	def create_validated_database(self):
 		"""
@@ -309,18 +319,48 @@ class DataConversion:
 			-width: length of column
 		"""
 		mysql_type_list = [
-			"tinyint", "smallint", "mediumint", "int", "integer", "bigint",
-			"decimal", "dec", "fixed",
-			"float", "double", "real",
-			"bool", "boolean",
-			"date", "year",
-			"datetime", "timestamp", "time",
-			"bit", "binary", "varbinary",
-			"tinyblob", "blob", "mediumblob", "longblob",
-			"character", "charset", "ascii", "unicode", "char", "varchar", "tinytext", "text", "mediumtext", "longtext",
+			"tinyint", 
+			"smallint", 
+			"mediumint", 
+			"integer", 
+			"int", 
+			"bigint",
+			"decimal", 
+			"dec", 
+			"fixed",
+			"float", 
+			"double", 
+			"real",
+			"boolean",
+			"bool", 
+			"datetime", 
+			"timestamp", 
+			"time",
+			"date", 
+			"year",
+			"bit", 
+			"binary", 
+			"varbinary",
+			"tinyblob", 
+			"blob", 
+			"mediumblob", 
+			"longblob",
+			"character", 
+			"charset", 
+			"ascii", 
+			"unicode", 
+			"char", 
+			"varchar", 
+			"tinytext", "text", "mediumtext", "longtext",
 			"enum", "set",
-			"geometry", "point", "linestring", "polygon",
-			"multipoint", "multilinestring", "multipolygon", "geometrycollection"
+			"geometry", 
+			"point", 
+			"linestring", 
+			"polygon",
+			"multipoint", 
+			"multilinestring", 
+			"multipolygon", 
+			"geometrycollection"
 		]
 		for mysql_type in mysql_type_list:
 			if re.search(f"^{mysql_type}", dtype):
@@ -467,11 +507,62 @@ class DataConversion:
 					fk_keys_list.append(fk_info)
 		return fk_keys_list
 
+	def create_triggers(self, mysql_connection):
+		"""
+		Create MySQL triggers
+		"""
+		triggers_info_list = self.get_triggers_info_list()
+		for trigger_info in triggers_info_list:
+			self.create_one_trigger(mysql_connection, trigger_info)
+
+	def get_triggers_info_list(self):
+		"""
+		Get list of triggers info.
+		List[
+			Dict(
+				"@uuid" : "6b3c1fdb-52c8-40b0-955f-0cf25a0976ee",
+				"table-name": <table name>,
+		        "name" : "upd_film",
+		        "action-orientation" : "row",
+		        "action-statement" : "BEGIN\n    IF (old.title != new.title) OR (old.description != new.description) OR (old.film_id != new.film_id)\n    THEN\n        UPDATE film_text\n            SET title=new.title,\n                description=new.description,\n                film_id=new.film_id\n        WHERE film_id=old.film_id;\n    END IF;\n  END",
+		        "condition-timing" : "after",
+		        "event-manipulation-type" : "update",
+			)
+		]
+		"""
+		db_schema = self.schema.get()
+		triggers_info_list = []
+		for table_schema in db_schema["catalog"]["tables"]:
+			for trigger in table_schema["triggers"]:
+				if type(trigger) is dict:
+					trigger_info = {
+						"uuid": trigger["@uuid"],
+						"table-name": table_schema["name"],
+						"trigger-name": trigger["name"],
+						"action-orientation": trigger["action-orientation"],
+						"action-statement": trigger["action-statement"],
+						"condition-timing": trigger["condition-timing"],
+						"event-manipulation-type": trigger["event-manipulation-type"],
+					}
+					triggers_info_list.append(trigger_info)
+		return triggers_info_list
+
+	def create_one_trigger(self, mysql_connection, trigger_info):
+		"""
+		"""
+		sql_create_trigger = f"""CREATE TRIGGER {trigger_info["trigger-name"]} {trigger_info["condition-timing"]} {trigger_info["event-manipulation-type"]} ON {trigger_info["table-name"]} FOR EACH {trigger_info["action-orientation"]} {trigger_info["action-statement"]}"""
+		# print(sql_create_trigger)
+		mycursor = mysql_connection.cursor()
+		mycursor.execute(sql_create_trigger)
+		mycursor.close()
+
+
 	def migrate_mongodb_to_mysql(self, mysql_connection):
 		"""
 		Migrate data from MongoDB back to MySQL
 		"""
-		for collection_name in self.schema.get_tables_name_list():
+		# for collection_name in self.schema.get_tables_name_list():
+		for collection_name in self.schema.get_tables_name_list()[:]:
 			self.migrate_one_collection_to_table(mysql_connection, collection_name)
 
 	def migrate_one_collection_to_table(self, mysql_connection, collection_name):
@@ -759,7 +850,7 @@ class DataConversion:
 									# print(row[i], type(row[i]))
 								elif dtype == "DATE":
 									# print(row[i], type(row[i]))
-									converted_data = datetime(row[i].year, row[i].month, row[i].day)
+									converted_data = datetime(row[i].year, row[i].month, row[i].day)#, row[i].hour, row[i].minute, row[i].second)
 								elif target_dtype == mongodb_dtype["decimal"]:
 									converted_data = Decimal128(row[i])
 								elif target_dtype == mongodb_dtype["object"]:
