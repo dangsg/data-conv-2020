@@ -34,8 +34,10 @@ class SchemaConversion:
 		self.__drop_mongodb()
 		self.__generate_mysql_schema()
 		self.__save()
+		self.save_schema_view()
 		self.create_mongo_schema_validators()
 		self.create_mongo_indexes()
+		self.drop_view()
 		return True
 
 	def get(self):
@@ -48,7 +50,7 @@ class SchemaConversion:
 		Save MySQL schema which was generate by SchemaCrawler to MongoDB database
 		"""
 		db_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
-		# print("Ready to write!")
+		# print("Ready 		
 		import_json_to_mongodb(db_connection, collection_name="schema", dbname=self.schema_conv_output_option.dbname, json_filename=self.schema_filename)
 		print(f"Save schema from {self.schema_conv_output_option.dbname} database to MongoDB successfully!")
 		return True
@@ -95,6 +97,18 @@ class SchemaConversion:
 		For development only.
 		"""
 		drop_mongodb_database(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname)
+
+	def drop_view(self):
+		mongodb_connection = open_connection_mongodb(
+			self.schema_conv_output_option.host, 
+			self.schema_conv_output_option.port, 
+			self.schema_conv_output_option.dbname
+			)
+		view_set = set(self.get_tables_and_views_list()) - set(self.get_tables_name_list())
+		for view in list(view_set):
+			mycol = mongodb_connection[view]
+			mycol.drop() 
+		return True
 
 	def extract_tables_schema(self, extracted_keys_list = ["@uuid", "name", "columns", "foreign-keys"]):
 		"""
@@ -257,6 +271,7 @@ class SchemaConversion:
 				json_schema = {}
 				json_schema["bsonType"] = "object"
 				json_schema["properties"] = props
+				# print(json_schema)
 				vexpr = {"$jsonSchema": json_schema}
 				cmd = OrderedDict([('collMod', table), ('validator', vexpr)])
 				db_connection.command(cmd)
@@ -278,7 +293,7 @@ class SchemaConversion:
 		# dtype_dict["timestamp"] = []
 		dtype_dict["binData"] = ["BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
 		# dtype_dict["blob"] = []
-		dtype_dict["string"] = ["CHARACTER", "CHARSET", "ASCII", "UNICODE", "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"]
+		dtype_dict["string"] = ["JSON", "CHARACTER", "CHARSET", "ASCII", "UNICODE", "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"]
 		dtype_dict["object"] = ["ENUM"]
 		dtype_dict["array"] = ["SET"]
 		# dtype_dict["single-geometry"] = []
@@ -294,9 +309,10 @@ class SchemaConversion:
 	def create_mongo_indexes(self):
 		"""
 		Add index to MongoDB collection.
-		Just use for running time. Need to remove index before exporting MongoDB database.
+		Just use for running time. Need to remove indexes before exporting MongoDB database.
 		"""
 		table_view_list = self.get_tables_and_views_list()
+		
 		mysql_connection = open_connection_mysql(
 			self.schema_conv_init_option.host, 
 			self.schema_conv_init_option.username, 
@@ -304,6 +320,7 @@ class SchemaConversion:
 			self.schema_conv_init_option.dbname, 
 			)
 		mysql_cursor = mysql_connection.cursor()
+		# Get indexes from MySQL by using SQL command because SchemaCrawler have not get enough information about indexes
 		sql_fetch_index = f"SELECT DISTINCT TABLE_NAME, INDEX_NAME, INDEX_TYPE FROM INFORMATION_SCHEMA. STATISTICS;"
 		mysql_cursor.execute(sql_fetch_index)
 		record = mysql_cursor.fetchall()
@@ -326,53 +343,57 @@ class SchemaConversion:
 			for index in index_list:
 				if(type(index) is not str): ### need to check all indexes again
 					# print(index)
-					index_name = index["name"]
-					index_type = idx_table_name_type_dict[table["name"]][index_name]
-					index_unique = index["unique"]
-					index_cols = index["columns"]
-					num_sub_index = len(index_cols)
-					if index_type == "BTREE":
-						if num_sub_index == 1:
-							# mongo_index_type = "default"
-							col_name = col_dict[index_cols[0]]
-							collection.create_index(col_name, unique = index_unique)
-						else:
-							# mongo_index_type = "compound"
-							# index_keys = {}
-							# for idx_uuid in index_cols:
-								# index_keys[col_dict[idx_uuid]] = 1
-							collection.create_index([(col_dict[idx_uuid], 1) for idx_uuid in index_cols], unique = index_unique)
-					# elif index_type == "SPATIAL":
-					# 	# mongo_index_type = "spatial"
-					# 	# print(col_dict[index_cols[0]])
-					# 	if num_sub_index == 1:
-					# 		# collection.create_index([(col_dict[index_cols[0]], GEO2D)], unique = index_unique)
-					# 		collection.create_index([(col_dict[index_cols[0]], "2dsphere")], unique = index_unique)
-					# 	else:
-					# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
-					# 	pass
-					# elif index_type == "FULLTEXT":
-					# 	# mongo_index_type = "text-index"
-					# 	if num_sub_index == 1:
-					# 		collection.create_index(col_dict[index_cols[0]], TEXT, unique = index_unique)
-					# 	else:
-					# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
-					# else:
-						# print(f"MySQL index type {index_type} has not been handled!")
+					if table["name"] in idx_table_name_type_dict:
+						index_name = index["name"]
+						index_type = idx_table_name_type_dict[table["name"]][index_name]
+						index_unique = index["unique"]
+						index_cols = index["columns"]
+						num_sub_index = len(index_cols)
+						if index_type == "BTREE":
+							if num_sub_index == 1:
+								# mongo_index_type = "default"
+								col_name = col_dict[index_cols[0]]
+								# print(type(col_name))
+								# collection.create_index("idx_" + col_name, unique = index_unique)
+								if col_name != "_id":
+									collection.create_index(col_name, unique = index_unique)
+							else:
+								# mongo_index_type = "compound"
+								# index_keys = {}
+								# for idx_uuid in index_cols:
+									# index_keys[col_dict[idx_uuid]] = 1
+								collection.create_index([(col_dict[idx_uuid], 1) for idx_uuid in index_cols], unique = index_unique)
+						# elif index_type == "SPATIAL":
+						# 	# mongo_index_type = "spatial"
+						# 	# print(col_dict[index_cols[0]])
+						# 	if num_sub_index == 1:
+						# 		# collection.create_index([(col_dict[index_cols[0]], GEO2D)], unique = index_unique)
+						# 		collection.create_index([(col_dict[index_cols[0]], "2dsphere")], unique = index_unique)
+						# 	else:
+						# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
+						# 	pass
+						# elif index_type == "FULLTEXT":
+						# 	# mongo_index_type = "text-index"
+						# 	if num_sub_index == 1:
+						# 		collection.create_index(col_dict[index_cols[0]], TEXT, unique = index_unique)
+						# 	else:
+						# 		collection.create_index([(col_dict[idx_uuid], TEXT) for idx_uuid in index_cols], unique = index_unique)
+						# else:
+							# print(f"MySQL index type {index_type} has not been handled!")
 
 
-	# def get_coluuid(self, table_name, col_name):
-	# 	"""
-	# 	Get column uuid:
-	# 	Input: Table name and column name.
-	# 	Output: Column uuid
-	# 	"""
-	# 	self.load_schema()
-	# 	for col in self.all_table_columns():
-	# 		if f"{table_name}.{col_name}" == col["short-name"]:
-	# 			return col["@uuid"]
-	# 	print(f"Can not find column {col_name} from table {table_name}!")
-	# 	return None
+	def get_coluuid(self, table_name, col_name):
+		"""
+		Get column uuid:
+		Input: Table name and column name.
+		Output: Column uuid
+		"""
+		self.load_schema()
+		for col in self.all_table_columns():
+			if f"{table_name}.{col_name}" == col["short-name"]:
+				return col["@uuid"]
+		print(f"Can not find column {col_name} from table {table_name}!")
+		return None
 
 	def get_col_type_from_schema_attribute(self, table_name, col_name):
 		"""
@@ -386,3 +407,118 @@ class SchemaConversion:
 				return col["attributes"]["COLUMN_TYPE"]
 		print(f"Can not find column {col_name} from table {table_name}!")
 		return None
+
+	def save_schema_view(self):
+		"""
+		Store a MySQL converted schema in MongoDB. 
+		This schema will be used for generated detail schema in future by end-user.
+		Converted schema structure:
+			Dict(
+				"Converted schema": Dict(
+					"Database type": "MySQL",
+					"Schema": <Database name>,
+					"Tables": List[
+						Dict(
+							"Table name": <table name>,
+							"Columns": List[
+								"Column name": <column name>
+							]
+						)
+					]
+				)
+			)
+		"""
+		self.load_schema()
+		converted_schema = {}
+		catalog_schema = self.db_schema["catalog"]
+
+		converted_schema["database-name"] = catalog_schema["database-info"]["product-name"]
+		converted_schema["database-version"] = catalog_schema["database-info"]["product-version"]
+		converted_schema["schema"] = catalog_schema["name"]
+		converted_schema["tables"] = []
+		converted_schema["foreign-keys"] = []
+
+		tables_schema = catalog_schema["tables"]
+		for table_schema in tables_schema:
+			table_info = {}
+			table_info["name"] = table_schema["name"]
+			table_info["engine"] = table_schema["attributes"]["ENGINE"]
+			table_info["table-collation"] = table_schema["attributes"]["TABLE_COLLATION"]
+
+			table_info["constraints"] = []
+			for table_schema_constraint in table_schema["table-constraints"]:
+				if type(table_schema_constraint) is dict:
+					table_constraint = {
+						"name": table_schema_constraint["name"],
+						"type": table_schema_constraint["constraint-type"],
+						"definition": table_schema_constraint["definition"]
+					}
+					table_info["constraints"].append(table_constraint)
+
+			table_info["triggers"] = []
+			for table_schema_trigger in table_schema["triggers"]:
+				if type(table_schema_trigger) is dict:
+					table_trigger = {
+						"name": table_schema_trigger["name"],
+						"action-condition" : table_schema_trigger["action-condition"],
+						"action-order" : table_schema_trigger["action-order"],
+						"action-orientation" : table_schema_trigger["action-orientation"],
+						"action-statement" : table_schema_trigger["action-statement"],
+						"condition-timing" : table_schema_trigger["condition-timing"],
+						"event-manipulation-type" : table_schema_trigger["event-manipulation-type"],
+					}
+					table_info["triggers"].append(table_trigger)
+
+			columns_schema = self.db_schema["all-table-columns"]
+			table_info["columns"] = []
+			for column_schema in columns_schema:
+				if column_schema["@uuid"] in table_schema["columns"]:
+					column_info = {
+						"name": column_schema["name"],
+						"character-set-name": column_schema["attributes"]["CHARACTER_SET_NAME"],
+						"collation-name": column_schema["attributes"]["COLLATION_NAME"],
+						"column-type": column_schema["attributes"]["COLUMN_TYPE"],
+						"nullable": column_schema["attributes"]["IS_NULLABLE"],
+						"auto-incremented": column_schema["auto-incremented"],
+						"nullable": column_schema["nullable"],
+						"default-value" : column_schema["default-value"],
+					}
+					table_info["columns"].append(column_info)
+
+			table_info["indexes"] = []
+			for index_schema in table_schema["indexes"]:
+				if type(index_schema) is dict:
+					index_column_list = list(map(lambda col_sche: {"name": col_sche["name"], "table": col_sche["short-name"].split(".")[0]}, list(filter(lambda col_sche: col_sche["@uuid"] in index_schema["columns"], columns_schema))))
+					index_info = {
+						"name": index_schema["name"],
+						"unique": index_schema["unique"],
+						"columns": index_column_list
+					}
+					table_info["indexes"].append(index_info)
+
+			converted_schema["tables"].append(table_info)
+
+			table_dict = self.get_tables_dict()
+			cols_dict = self.get_columns_dict()
+			for foreign_key_schema in table_schema["foreign-keys"]:
+				if type(foreign_key_schema) is dict:
+					col_refs = list(map(lambda fk_sche: {
+							"key-sequence": fk_sche["key-sequence"],
+							"foreign-key-column": cols_dict[fk_sche["foreign-key-column"]], 
+							"foreign-key-table": table_dict[fk_sche["foreign-key-column"]],
+							"primary-key-column": cols_dict[fk_sche["primary-key-column"]], 
+							"primary-key-table": table_dict[fk_sche["primary-key-column"]],
+						}, 
+						foreign_key_schema["column-references"]))
+					foreign_key_info = {
+						"name": foreign_key_schema["name"],
+						"column-references": col_refs,
+						"delete-rule": foreign_key_schema["delete-rule"],
+						"update-rule": foreign_key_schema["update-rule"],
+					}
+					converted_schema["foreign-keys"].append(foreign_key_info)
+		
+		mongodb_connection = open_connection_mongodb(self.schema_conv_output_option.host, self.schema_conv_output_option.port, self.schema_conv_output_option.dbname) 
+		store_json_to_mongodb(mongodb_connection, "schema_view", converted_schema)
+		print(f"Save schema view from {self.schema_conv_output_option.dbname} database to MongoDB successfully!")
+		return True
